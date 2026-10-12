@@ -1,0 +1,10 @@
+# Archivos generados por Python (no hace falta subirlos)
+__pycache__/
+*.pyc
+
+# Entornos virtuales
+venv/
+.venv/
+
+# Configuración local de Claude Code
+.claude/

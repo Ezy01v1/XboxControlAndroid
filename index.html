@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<title>Control</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+  html, body { margin: 0; height: 100%; background: #0f1115; color: #e6e8ee; font-family: system-ui, sans-serif; overflow: hidden; touch-action: none; overscroll-behavior: none; }
+  /* El área de controles respeta los bordes "seguros" (cámara perforada / esquinas redondeadas) */
+  #pad { position: fixed; top: 0; bottom: 0; left: env(safe-area-inset-left, 0); right: env(safe-area-inset-right, 0); }
+  .btn, .stick, .trig { position: absolute; touch-action: none; }
+
+  /* Todo se mide en dvmin (= 1% del alto VISIBLE en horizontal; la "d" de "dynamic"
+     descuenta la barra de Chrome si está visible, así nada se corta abajo).
+     Las distancias no cambian con la proporción de la pantalla: el espacio sobrante queda en el centro. */
+  .btn { display: grid; place-items: center; border-radius: 50%; background: #232733; border: 2px solid #343a4d; font-weight: 700; font-size: 4.5dvmin; transition: transform .05s; }
+  .btn.on { background: #4b5578; transform: scale(.93); }
+  .face { width: 15dvmin; height: 15dvmin; }
+  .A { background: #1f3d2b; border-color: #2f8f55; } .B { background: #432226; border-color: #b54a55; }
+  .X { background: #1f2f4a; border-color: #3f78c9; } .Y { background: #4a3e1c; border-color: #c9a53f; }
+  .A.on { background: #2f8f55; } .B.on { background: #b54a55; } .X.on { background: #3f78c9; } .Y.on { background: #c9a53f; }
+
+  .dp { width: 13dvmin; height: 13dvmin; border-radius: 3dvmin; font-size: 5dvmin; }
+  .small { width: 12dvmin; height: 7dvmin; border-radius: 3dvmin; font-size: 3dvmin; }
+  .shoulder { width: 22dvmin; height: 10dvmin; border-radius: 3dvmin; font-size: 4dvmin; }
+
+  /* Gatillo analógico: una barra (.fill) crece de arriba hacia abajo según el valor 0..1 */
+  .trig { overflow: hidden; }
+  .trig .fill { position: absolute; left: 0; right: 0; top: 0; height: 0%; background: #5a6490; pointer-events: none; }
+  .trig span { position: relative; pointer-events: none; } /* el texto queda encima de la barra */
+
+  .stick { width: 34dvmin; height: 34dvmin; border-radius: 50%; background: radial-gradient(#1b1e28, #151822); border: 2px solid #343a4d; }
+  .knob { position: absolute; width: 15dvmin; height: 15dvmin; left: 50%; top: 50%; margin: -7.5dvmin 0 0 -7.5dvmin; border-radius: 50%; background: #3b4260; border: 2px solid #5a6490; pointer-events: none; }
+
+  #status { position: fixed; top: 6px; left: 50%; transform: translateX(-50%); font-size: 12px; padding: 3px 10px; border-radius: 10px; background: #232733; z-index: 5; }
+  #status.ok { background: #1f3d2b; } #status.bad { background: #432226; }
+  /* Botón de ajustes y panel */
+  #gear { position: absolute; left: calc(50% - 4dvmin); top: 20dvmin; width: 8dvmin; height: 8dvmin; border-radius: 50%; background: #232733; border: 2px solid #343a4d; color: #e6e8ee; font-size: 4.5dvmin; padding: 0; }
+  #settings { display: none; position: fixed; inset: 0; z-index: 8; background: rgba(0,0,0,.6); place-items: center; }
+  #settings.open { display: grid; }
+  #settings .box { background: #1a1d26; border: 2px solid #343a4d; border-radius: 12px; padding: 14px 18px; width: min(90vw, 420px); font-size: 15px; }
+  #settings h3 { margin: 0 0 10px; font-size: 17px; }
+  #settings label { display: block; margin: 10px 0 2px; }
+  #settings input[type=range] { width: 100%; touch-action: auto; } /* el deslizador sí necesita poder arrastrarse */
+  #settings .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+  #settings button { font-size: 15px; padding: 8px 14px; border-radius: 8px; border: 2px solid #343a4d; background: #232733; color: #e6e8ee; }
+  #settings .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  #settings .check input { width: 20px; height: 20px; touch-action: auto; }
+
+  /* Recuadro de depuración: en el hueco libre del centro. pointer-events:none
+     para que nunca bloquee un toque */
+  #debug { display: none; position: absolute; left: 74dvmin; right: 67dvmin; top: 31dvmin; max-height: 64dvmin; overflow: hidden;
+           pointer-events: none; background: rgba(15,17,21,.85); border: 1px solid #343a4d; border-radius: 8px; padding: 6px 8px;
+           font: 11px/1.35 ui-monospace, Consolas, monospace; color: #b8c0d8; white-space: pre-wrap; word-break: break-all; }
+  #debug.on { display: block; }
+  #rotate { display: none; position: fixed; inset: 0; background: #0f1115; z-index: 10; place-items: center; text-align: center; font-size: 5vw; }
+  @media (orientation: portrait) { #rotate { display: grid; } }
+</style>
+</head>
+<body>
+<div id="rotate">Gira el celular a horizontal</div>
+<div id="status" class="bad">desconectado</div>
+
+<!-- Panel de ajustes (se guarda en localStorage del celular) -->
+<div id="settings">
+  <div class="box">
+    <h3>Ajustes de los sticks</h3>
+    <label>Zona muerta: <b id="dzVal"></b></label>
+    <input type="range" id="dz" min="0" max="0.3" step="0.01">
+    <label>Sensibilidad: <b id="sensVal"></b></label>
+    <input type="range" id="sens" min="0.5" max="2" step="0.05">
+    <label class="check"><input type="checkbox" id="dbg"> Modo depuración (ver valores enviados)</label>
+    <div class="row">
+      <button id="resetCfg">Restablecer</button>
+      <button id="closeCfg">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div id="pad">
+  <!-- Distribución tipo mando Xbox (todo en dvmin):
+       izquierda: gatillo/hombro arriba, stick L arriba-afuera, D-pad abajo-adentro
+       derecha:   gatillo/hombro arriba, botones de cara arriba-afuera, stick R abajo-adentro -->
+
+  <!-- Gatillos y hombros: franja superior (alto 3..13 dvmin).
+       LT/RT son analógicos: se presionan deslizando el dedo hacia abajo -->
+  <div class="btn shoulder trig" data-trig="L" style="left:3dvmin;  top:3dvmin"><div class="fill"></div><span>LT</span></div>
+  <div class="btn shoulder" data-btn="LB" style="left:28dvmin; top:3dvmin">LB</div>
+  <div class="btn shoulder trig" data-trig="R" style="right:3dvmin;  top:3dvmin"><div class="fill"></div><span>RT</span></div>
+  <div class="btn shoulder" data-btn="RB" style="right:28dvmin; top:3dvmin">RB</div>
+
+  <!-- Centro: BACK / START (debajo del indicador de estado) -->
+  <div class="btn small" data-btn="BACK"  style="left:calc(50% - 14dvmin); top:10dvmin">BACK</div>
+  <div class="btn small" data-btn="START" style="left:calc(50% + 2dvmin);  top:10dvmin">START</div>
+
+  <!-- Botón de ajustes (no envía nada al PC, solo abre el panel) -->
+  <button id="gear" aria-label="Ajustes">⚙</button>
+
+  <!-- Modo depuración: muestra lo que se envía al PC (se activa en ⚙) -->
+  <div id="debug"></div>
+
+  <!-- Stick izquierdo: arriba-afuera (16..50 dvmin) -->
+  <div class="stick" data-stick="L" style="left:4dvmin; top:16dvmin"><div class="knob"></div></div>
+
+  <!-- D-pad: abajo-adentro. Cruz de 3x3 casillas de 14 dvmin (botón 13 + 1 de separación) -->
+  <div class="btn dp" data-btn="UP"    style="left:44dvmin; top:55dvmin">▲</div>
+  <div class="btn dp" data-btn="LEFT"  style="left:30dvmin; top:69dvmin">◀</div>
+  <div class="btn dp" data-btn="RIGHT" style="left:58dvmin; top:69dvmin">▶</div>
+  <div class="btn dp" data-btn="DOWN"  style="left:44dvmin; top:83dvmin">▼</div>
+
+  <!-- Botones de cara: arriba-afuera, rombo de 45x45 dvmin (16..61 dvmin) -->
+  <div class="btn face Y" data-btn="Y" style="right:19dvmin; top:16dvmin">Y</div>
+  <div class="btn face X" data-btn="X" style="right:34dvmin; top:31dvmin">X</div>
+  <div class="btn face B" data-btn="B" style="right:4dvmin;  top:31dvmin">B</div>
+  <div class="btn face A" data-btn="A" style="right:19dvmin; top:46dvmin">A</div>
+
+  <!-- Stick derecho: abajo-adentro (63..97 dvmin). Ya estaba programado en el JS, solo estaba oculto -->
+  <div class="stick" data-stick="R" style="right:30dvmin; top:63dvmin"><div class="knob"></div></div>
+</div>
+
+<script>
+(() => {
+  const status = document.getElementById('status');
+  let ws, queue = [];
+
+  function connect() {
+    ws = new WebSocket(`ws://${location.host}/ws`);
+    ws.onopen = () => { status.textContent = 'conectado'; status.className = 'ok'; };
+    ws.onclose = () => { status.textContent = 'reconectando…'; status.className = 'bad'; setTimeout(connect, 1000); };
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      if (m.t === 'rumble') dbgRumble(m); // para el modo depuración
+      if (m.t === 'rumble' && navigator.vibrate) {
+        const power = Math.max(m.l, m.s);
+        navigator.vibrate(power > 0 ? Math.round(20 + power / 255 * 60) : 0);
+      }
+    };
+  }
+  connect();
+
+  function send(obj) {
+    const ok = !!ws && ws.readyState === 1;
+    if (ok) ws.send(JSON.stringify(obj));
+    dbgRecord(obj, ok); // el modo depuración registra cada mensaje (enviado o descartado)
+  }
+
+  // --- Modo depuración ---
+  // Guardamos el último estado de cada control y redibujamos el recuadro
+  // como mucho una vez por fotograma (requestAnimationFrame), no en cada mensaje.
+  const dbgBox = document.getElementById('debug');
+  const dbg = {
+    sticks: { L: {x:0, y:0}, R: {x:0, y:0} },
+    trig: { L: 0, R: 0 },
+    btns: new Set(),     // botones presionados ahora mismo
+    last: '—',           // último JSON
+    sent: 0, dropped: 0, // contadores totales
+    rate: 0, count: 0,   // mensajes por segundo
+    rumble: '—',
+  };
+  let dbgPending = false;
+
+  function dbgRecord(obj, ok) {
+    if (!dbgBox.classList.contains('on')) return; // desactivado: no hacemos nada
+    if (obj.t === 'stick') dbg.sticks[obj.s] = { x: obj.x, y: obj.y };
+    else if (obj.t === 'trig') dbg.trig[obj.s] = obj.v;
+    else if (obj.t === 'btn') obj.d ? dbg.btns.add(obj.b) : dbg.btns.delete(obj.b);
+    dbg.last = JSON.stringify(obj);
+    if (ok) { dbg.sent++; dbg.count++; } else dbg.dropped++;
+    dbgDraw();
+  }
+  function dbgRumble(m) {
+    dbg.rumble = `l=${m.l} s=${m.s}`;
+    dbgDraw();
+  }
+  function dbgDraw() {
+    if (dbgPending || !dbgBox.classList.contains('on')) return;
+    dbgPending = true;
+    requestAnimationFrame(() => {
+      dbgPending = false;
+      const f = (n) => (n >= 0 ? ' ' : '') + n.toFixed(2); // alinea el signo
+      const { L, R } = dbg.sticks;
+      dbgBox.textContent =
+        `Stick L  x${f(L.x)} y${f(L.y)}\n` +
+        `Stick R  x${f(R.x)} y${f(R.y)}\n` +
+        `LT ${dbg.trig.L.toFixed(2)}   RT ${dbg.trig.R.toFixed(2)}\n` +
+        `Botones: ${[...dbg.btns].join(' ') || '—'}\n` +
+        `Msg/s: ${dbg.rate}  enviados: ${dbg.sent}  descartados: ${dbg.dropped}\n` +
+        `Vibración: ${dbg.rumble}\n` +
+        `Último: ${dbg.last}`;
+    });
+  }
+  // Cada segundo pasamos el contador a "mensajes por segundo"
+  setInterval(() => { dbg.rate = dbg.count; dbg.count = 0; dbgDraw(); }, 1000);
+  const buzz = (ms = 12) => navigator.vibrate && navigator.vibrate(ms);
+
+  // --- Botones digitales (multitouch con pointer events) ---
+  document.querySelectorAll('[data-btn]').forEach(el => {
+    const name = el.dataset.btn;
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+      el.classList.add('on'); buzz();
+      send({t:'btn', b:name, d:1});
+    });
+    const up = (e) => {
+      el.classList.remove('on');
+      send({t:'btn', b:name, d:0});
+    };
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  });
+
+  // --- Gatillos analógicos LT/RT ---
+  // Al apoyar el dedo se guarda su altura inicial. Cuanto más baja el dedo,
+  // más se presiona el gatillo: 0 al inicio, 1 al recorrer TRIG_TRAVEL dvmin.
+  const TRIG_TRAVEL = 25; // recorrido completo, en dvmin (25% del alto visible)
+  document.querySelectorAll('[data-trig]').forEach(el => {
+    const side = el.dataset.trig;
+    const fill = el.querySelector('.fill');
+    let activeId = null;  // qué dedo controla este gatillo (para el multitouch)
+    let startY = 0;       // altura donde se apoyó el dedo
+    let lastV = -1;       // último valor enviado (para no repetir mensajes)
+
+    function setValue(v) {
+      v = Math.round(v * 100) / 100;         // 2 decimales bastan
+      if (v === lastV) return;               // sin cambios: no enviamos nada
+      lastV = v;
+      fill.style.height = (v * 100) + '%';   // barra visual
+      send({t:'trig', s:side, v});
+    }
+    el.addEventListener('pointerdown', (e) => {
+      if (activeId !== null) return;         // ya hay un dedo en este gatillo
+      e.preventDefault();
+      activeId = e.pointerId;
+      el.setPointerCapture(e.pointerId);     // seguimos el dedo aunque salga del botón
+      startY = e.clientY;
+      el.classList.add('on'); buzz();
+      setValue(0);
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== activeId) return;
+      // Convertimos el recorrido de dvmin a píxeles con el alto visible actual
+      const travelPx = TRIG_TRAVEL / 100 * Math.min(innerWidth, innerHeight);
+      const v = (e.clientY - startY) / travelPx;
+      setValue(Math.max(0, Math.min(1, v))); // limitado a 0..1
+    });
+    const release = (e) => {
+      if (e.pointerId !== activeId) return;
+      activeId = null;
+      el.classList.remove('on');
+      setValue(0);
+    };
+    el.addEventListener('pointerup', release);
+    el.addEventListener('pointercancel', release);
+  });
+
+  // --- Ajustes: zona muerta y sensibilidad (guardados en localStorage) ---
+  const DEFAULTS = { deadzone: 0.05, sensitivity: 1, debug: false };
+  const STORAGE_KEY = 'controlAjustes';
+  let cfg = { ...DEFAULTS };
+  // localStorage puede fallar (modo incógnito, etc.): por eso el try/catch
+  try { cfg = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') }; } catch {}
+  function saveCfg() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg)); } catch {}
+  }
+
+  // Recibe x, y en -1..1 (posición cruda del dedo) y devuelve los valores a enviar.
+  function applyStickSettings(x, y) {
+    const mag = Math.hypot(x, y);              // distancia al centro (0..1)
+    if (mag <= cfg.deadzone) return [0, 0];    // dentro de la zona muerta: nada
+    // Re-escalamos para que justo al salir de la zona muerta el valor empiece en 0
+    let m = (mag - cfg.deadzone) / (1 - cfg.deadzone);
+    m = Math.min(1, m * cfg.sensitivity);      // sensibilidad, sin pasarnos de 1
+    return [x / mag * m, y / mag * m];         // misma dirección, nueva magnitud
+  }
+
+  // Conectar el panel con los deslizadores
+  const panel = document.getElementById('settings');
+  const dzInput = document.getElementById('dz'), sensInput = document.getElementById('sens');
+  const dzVal = document.getElementById('dzVal'), sensVal = document.getElementById('sensVal');
+  function showCfg() {
+    dzInput.value = cfg.deadzone;   dzVal.textContent = cfg.deadzone.toFixed(2);
+    sensInput.value = cfg.sensitivity; sensVal.textContent = cfg.sensitivity.toFixed(2) + '×';
+    dbgInput.checked = cfg.debug;
+    dbgBox.classList.toggle('on', cfg.debug); // mostrar/ocultar el recuadro
+    dbgDraw();
+  }
+  const dbgInput = document.getElementById('dbg');
+  dbgInput.addEventListener('change', () => { cfg.debug = dbgInput.checked; showCfg(); saveCfg(); });
+  showCfg(); // aplicar lo guardado al cargar (por ejemplo, el modo depuración)
+  dzInput.addEventListener('input', () => { cfg.deadzone = +dzInput.value; showCfg(); saveCfg(); });
+  sensInput.addEventListener('input', () => { cfg.sensitivity = +sensInput.value; showCfg(); saveCfg(); });
+  document.getElementById('resetCfg').addEventListener('click', () => { cfg = { ...DEFAULTS }; showCfg(); saveCfg(); });
+  document.getElementById('gear').addEventListener('click', () => { showCfg(); panel.classList.add('open'); });
+  document.getElementById('closeCfg').addEventListener('click', () => panel.classList.remove('open'));
+
+  // --- Sticks analógicos ---
+  document.querySelectorAll('[data-stick]').forEach(base => {
+    const side = base.dataset.stick;
+    const knob = base.querySelector('.knob');
+    let activeId = null;
+
+    function move(e) {
+      const r = base.getBoundingClientRect();
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const radius = r.width / 2;
+      let dx = e.clientX - cx, dy = e.clientY - cy;
+      const dist = Math.hypot(dx, dy);
+      if (dist > radius) { dx = dx / dist * radius; dy = dy / dist * radius; }
+      knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      // La bolita sigue al dedo; el valor enviado pasa por zona muerta y sensibilidad
+      const [x, y] = applyStickSettings(dx / radius, -dy / radius);
+      send({t:'stick', s:side, x: +x.toFixed(3), y: +y.toFixed(3)});
+    }
+    function release() {
+      activeId = null;
+      knob.style.transform = '';
+      send({t:'stick', s:side, x:0, y:0});
+    }
+    base.addEventListener('pointerdown', (e) => {
+      if (activeId !== null) return;
+      e.preventDefault();
+      activeId = e.pointerId;
+      base.setPointerCapture(e.pointerId);
+      buzz(8); move(e);
+    });
+    base.addEventListener('pointermove', (e) => { if (e.pointerId === activeId) move(e); });
+    base.addEventListener('pointerup', (e) => { if (e.pointerId === activeId) release(); });
+    base.addEventListener('pointercancel', (e) => { if (e.pointerId === activeId) release(); });
+  });
+
+  // --- Pantalla completa + mantener pantalla encendida ---
+  // Se usa 'pointerup' (al levantar el dedo): en Android, Chrome solo permite
+  // pedir pantalla completa en ese momento, no al apoyar el dedo (pointerdown).
+  // Se reintenta en cada toque mientras no estemos en pantalla completa
+  // (por ejemplo, si saliste con el gesto de "atrás").
+  let wakeLock = null;
+  document.addEventListener('pointerup', async () => {
+    if (!document.fullscreenElement) {
+      try { await document.documentElement.requestFullscreen({ navigationUI: 'hide' }); } catch {}
+      try { await screen.orientation.lock('landscape'); } catch {}
+    }
+    // El bloqueo de pantalla encendida se pierde al cambiar de app: lo pedimos de nuevo
+    if (!wakeLock || wakeLock.released) {
+      try { wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+    }
+  });
+
+  // Bloquear menú contextual / gestos
+  document.addEventListener('contextmenu', e => e.preventDefault());
+})();
+</script>
+</body>
+</html>
